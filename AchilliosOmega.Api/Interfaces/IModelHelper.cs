@@ -4,8 +4,8 @@ namespace AchilliosOmega.Api.Interfaces
 {
     public interface IModelHelper
     {
-        ITransformer TrainChatbotModel(MLContext mlContext);
-        string SaveChatbotModel(MLContext mlContext, IDataView data, ITransformer model);
-        ITransformer LoadChatbotModel(MLContext mlContext);
+        ITransformer BuildAndTrainModel(MLContext mlContext);
+        string SaveModel(MLContext mlContext, IDataView data, ITransformer model);
+        ITransformer LoadModel(MLContext mlContext);
     }
 }

@@ -8,13 +8,13 @@ namespace AchilliosOmega.Api.Helpers
 {
     public class ModelHelper : IModelHelper
     {
-        private string _modelFileName;
-        private string _trainingDataFileName;
+        private readonly string _modelFileName;
+        private readonly string _trainingDataFileName;
 
-        private string? _modelFilePath;
+        private static string? _modelFilePath;
         private string? _trainingDataFilePath;
 
-        private string _trainingDataUrl;
+        private readonly string _trainingDataUrl;
 
         private readonly ILogger<ModelHelper> _logger;
 
@@ -25,80 +25,115 @@ namespace AchilliosOmega.Api.Helpers
             _modelFileName = "model.zip";
             _trainingDataFileName = "intents.json";
 
-            _trainingDataUrl = "https://drive.proton.me/urls/DEJXWFRN34#Kjvd0piZDQXS";
+            _trainingDataUrl = "https://pastebin.com/raw/F4tqKcp5";
         }
 
-        public ITransformer TrainChatbotModel(MLContext mlContext)
+        public ITransformer BuildAndTrainModel(MLContext mlContext)
         {
-            _trainingDataFilePath = DownloadDataset();
-            var data = FormatDataset(_trainingDataFilePath);
+            try
+            {
+                _trainingDataFilePath = DownloadDataset();
+                var data = FormatDataset(_trainingDataFilePath);
 
-            var dataView = mlContext.Data.LoadFromEnumerable(data);
+                var dataView = mlContext.Data.LoadFromEnumerable(data);
 
-            var pipeline = mlContext.Transforms.Text.FeaturizeText("Text")
-                .Append(mlContext.Transforms.Conversion.MapValueToKey("Intent"))
-                .Append(mlContext.Transforms.NormalizeMinMax("Text"))
-                .Append(mlContext.Transforms.Conversion.MapKeyToValue("PredictedIntent"))
-                .Append(mlContext.Transforms.Conversion.MapValueToKey("Responses"))
-                .Append(mlContext.Transforms.Conversion.MapKeyToValue("PredictedResponse"))
-                .Append(mlContext.Transforms.Text.ProduceWordBags("Text"))
-                .Append(mlContext.Transforms.Text.TokenizeIntoWords("Text"))
-                .Append(mlContext.Transforms.Text.RemoveDefaultStopWords("Text"))
-                .Append(mlContext.Transforms.Text.NormalizeText("Text"))
-                .Append(mlContext.Transforms.Text.ProduceNgrams("Text"));
+                var pipeline = mlContext.Transforms.Text.FeaturizeText("Text", nameof(Message.Text))
+                    .Append(mlContext.Transforms.NormalizeMinMax("Text"))
+                    .Append(mlContext.Transforms.Conversion.MapValueToKey("Intent", nameof(Message.Intent)))
+                    .Append(mlContext.Transforms.Conversion.MapKeyToValue("Intent"))
+                    .Append(mlContext.Transforms.Conversion.MapValueToKey("Response", nameof(Message.Response)))
+                    .Append(mlContext.Transforms.Conversion.MapKeyToValue("Response"))
+                    .AppendCacheCheckpoint(mlContext);
+                    //.Append(mlContext.Transforms.Text.ProduceWordBags("Text"))
+                    //.Append(mlContext.Transforms.Text.TokenizeIntoWords("Text"))
+                    //.Append(mlContext.Transforms.Text.RemoveDefaultStopWords("Text"))
+                    //.Append(mlContext.Transforms.Text.NormalizeText("Text"))
+                    //.Append(mlContext.Transforms.Text.ProduceNgrams("Text"))
 
-            var model = pipeline.Fit(dataView);
+                var model = pipeline.Fit(dataView);
 
-            _modelFilePath = SaveChatbotModel(mlContext, dataView, model);
+                _modelFilePath = SaveModel(mlContext, dataView, model);
 
-            return model;
+                return model;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("Error occured training the model.", ex);
+                throw;
+            }
+}
+
+        public string SaveModel(MLContext mlContext, IDataView data, ITransformer model)
+        {
+            try
+            {
+                _logger.LogInformation("Saving Training Model");
+                mlContext.Model.Save(model, data.Schema, _modelFileName);
+                return Path.Combine(Directory.GetCurrentDirectory(), _modelFileName);
+            }
+            catch(Exception ex)
+            {
+                _logger.LogError("Error occured saving the Training Model", ex);
+                throw;
+            }
         }
 
-        public string SaveChatbotModel(MLContext mlContext, IDataView data, ITransformer model)
+        public ITransformer LoadModel(MLContext mlContext)
         {
-            mlContext.Model.Save(model, data.Schema, _modelFileName);
-            return Path.Combine(Directory.GetCurrentDirectory(), _modelFileName); ;
-        }
-
-        public ITransformer LoadChatbotModel(MLContext mlContext)
-        {
-            if (File.Exists(_modelFilePath) || _modelFilePath == null)
-                return TrainChatbotModel(mlContext);
-            else
-                return mlContext.Model.Load(_modelFilePath, out var modelSchema);
+            try
+            {
+                if (File.Exists(_modelFilePath) || _modelFilePath == null)
+                    return BuildAndTrainModel(mlContext);
+                else
+                    return mlContext.Model.Load(_modelFilePath, out var modelSchema);
+            }
+            catch(Exception ex)
+            {
+                _logger.LogError("Error occured loading the Training Model", ex);
+                throw;
+            }
         }
 
         private string DownloadDataset()
         {
-            using HttpClient client = new();
-            using var response = client.GetAsync(_trainingDataUrl, HttpCompletionOption.ResponseHeadersRead).Result;
-            using var fileStream = new FileStream(_trainingDataFileName, FileMode.Create, FileAccess.Write, FileShare.None);
+            try
+            {
+                using HttpClient client = new();
+                using var response = client.GetAsync(_trainingDataUrl, HttpCompletionOption.ResponseHeadersRead).Result;
+                using var fileStream = new FileStream(_trainingDataFileName, FileMode.Create, FileAccess.Write, FileShare.None);
 
-            response.Content.CopyToAsync(fileStream).Wait();
+                response.Content.CopyToAsync(fileStream).Wait();
 
-            return fileStream.Name;
+                return fileStream.Name;
+
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("Error occured downloading the dataset.", ex);
+                throw;
+            }
         }
 
         private IEnumerable<Message> FormatDataset(string datasetFilePath)
         {
             var datasetFile = File.ReadAllText(datasetFilePath);
-            var dataset = JsonConvert.DeserializeObject<IEnumerable<DatasetRow>>(datasetFile);
+            var dataset = JsonConvert.DeserializeObject<DatasetWrapper>(datasetFile);
 
             if (dataset != null)
             {
-                return dataset
+                return dataset.Intents
                     .SelectMany(datasetRow => datasetRow.Text
                     .SelectMany(text => datasetRow.Responses
                     .Select(response => new Message()
                         {
                             Intent = datasetRow.Intent,
                             Text = text,
-                            Responses = response
+                            Response = response
                         })));
             } 
             else
             {
-                throw new NullReferenceException("There was an issue trying to compile the dataset.");
+                throw new NullReferenceException("Dataset file is not downloaded, or could not be found.");
             }
         }
     }

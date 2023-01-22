@@ -12,27 +12,34 @@ public class ChatbotController : ControllerBase
 
     private readonly MLContext _mlContext;
     private readonly IModelHelper _modelHelper;
-    private ITransformer? _model;
 
     private static PredictionEngine<Message, ResponsePrediction>? _predictionEngine;
 
     public ChatbotController(ILogger<ChatbotController> logger, MLContext mlContext, IModelHelper modelHelper)
     {
-        _logger = logger;
-        _mlContext = mlContext;
-        _modelHelper = modelHelper;
-
-        if (_predictionEngine == null)
+        try
         {
-            _model = _modelHelper.LoadChatbotModel(_mlContext);
-            _predictionEngine = _mlContext.Model.CreatePredictionEngine<Message, ResponsePrediction>(_model);
+            _logger = logger;
+            _mlContext = mlContext;
+            _modelHelper = modelHelper;
+
+            if (_predictionEngine == null)
+            {
+                var _model = _modelHelper.LoadModel(_mlContext);
+                _predictionEngine = _mlContext.Model.CreatePredictionEngine<Message, ResponsePrediction>(_model);
+            }
+
+            JsonConvert.DefaultSettings = () => new JsonSerializerSettings
+            {
+                Formatting = Formatting.Indented,
+                NullValueHandling = NullValueHandling.Ignore
+            };
+        } 
+        catch(Exception ex)
+        {
+            _logger?.LogError("Error occured setting up the api.", ex);
+            throw;
         }
-
-        JsonConvert.DefaultSettings = () => new JsonSerializerSettings
-        {
-            Formatting = Formatting.Indented,
-            NullValueHandling = NullValueHandling.Ignore
-        };
     }
 
     [HttpGet]
@@ -42,33 +49,40 @@ public class ChatbotController : ControllerBase
     }
 
     [HttpPost]
-    public IActionResult Post(Message input)
+    public IActionResult Post([FromBody] string text)
     {
-        if (string.IsNullOrWhiteSpace(input.Text))
+        if (string.IsNullOrWhiteSpace(text))
         {
             return StatusCode(500, "No message was sent.");
         }
 
         if (_predictionEngine != null)
         {
-            var prediction = _predictionEngine.Predict(input);
+            var prediction = _predictionEngine.Predict(new Message { Text = text });
 
-            _logger.LogInformation($"Intent: {prediction.PredictedIntent}");
-            _logger.LogInformation($"Response: {prediction.PredictedResponse}");
-            _logger.LogInformation($"Confidence: {prediction.Score}");
-
-            var output = new Message
+            if (!string.IsNullOrWhiteSpace(prediction.PredictedIntent) || !string.IsNullOrWhiteSpace(prediction.PredictedResponse))
             {
-                Text = input.Text,
-                Intent = prediction.PredictedIntent,
-                Responses = prediction.PredictedResponse
-            };
+                _logger.LogInformation($"Intent: {prediction.PredictedIntent}");
+                _logger.LogInformation($"Response: {prediction.PredictedResponse}");
+                _logger.LogInformation($"Confidence: {prediction.Score}");
 
-            return Ok(output);
+                var output = new Message
+                {
+                    Text = text,
+                    Intent = prediction.PredictedIntent,
+                    Response = prediction.PredictedResponse
+                };
+
+                return Ok(output);
+            }
+            else
+            {
+                return StatusCode(500, "An error has occured when responding.");
+            }
         }
         else
         {
-            return StatusCode(500, "Prediction Engine not loaded. ");
+            return StatusCode(500, "Prediction Engine not loaded.");
         }
     }
 }
