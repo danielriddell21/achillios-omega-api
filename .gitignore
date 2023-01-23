@@ -363,5 +363,4 @@ MigrationBackup/
 FodyWeavers.xsd
 
 # Generated ML files
-**/intents.json
-**/model.zip
+
